@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>小红书图文生产台 Demo</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Xiaohongshu Note Studio</p>
+          <h1>小红书图文一键生成</h1>
+        </div>
+        <div class="topbar-status">
+          <span class="status-dot"></span>
+          <span>连接中</span>
+        </div>
+      </header>
+
+      <main class="workspace">
+        <section class="input-panel" aria-label="创作输入">
+          <div class="panel-title">
+            <div>
+              <h2>先填这两项</h2>
+              <p>不知道怎么写也没关系，粗略写就行。</p>
+            </div>
+          </div>
+
+          <label class="field">
+            <span>你想写什么？</span>
+            <textarea id="topic" rows="2">AI 做图总翻车的 3 个原因</textarea>
+          </label>
+
+          <label class="field">
+            <span>有什么素材？</span>
+            <textarea id="material" rows="5">很多人让 AI 生成小红书图文，问题不是模型不会画，而是提示词里没有说清楚用户、用途和风格边界。结果就是画面好看但不能发、标题不清楚、正文信息承载不住。</textarea>
+          </label>
+
+          <details class="simple-settings">
+            <summary>可选设置</summary>
+            <label class="field compact">
+              <span>账号感觉</span>
+              <select id="persona">
+                <option>AI + IP 实战，小白友好</option>
+                <option>一人公司效率工具</option>
+                <option>AI 内容工作流教练</option>
+              </select>
+            </label>
+
+            <label class="field compact">
+              <span>图片风格</span>
+              <select id="style">
+                <option>浅色轻手账信息卡风</option>
+                <option>深色工具书风</option>
+                <option>高对比流量风</option>
+              </select>
+            </label>
+          </details>
+
+          <div class="api-card">
+            <div>
+              <p class="api-title">AI 生成</p>
+              <p>正在连接 DeepSeek 文案和 Image2 图片。</p>
+            </div>
+            <span>Checking</span>
+          </div>
+
+          <div class="actions">
+            <button class="primary" id="primaryFlow">开始生成</button>
+            <button class="ghost" id="exportPackage">打开文件夹</button>
+          </div>
+        </section>
+
+        <section class="stage-panel" aria-label="生产流程">
+          <div class="helper-card">
+            <p class="eyebrow">Next</p>
+            <h2 id="nextTitle">点按钮，先生成图文方案</h2>
+            <p id="nextText">系统会先把选题变成标题、正文、拆页和样图方向。你不用先理解流程。</p>
+          </div>
+
+          <div class="steps" id="steps">
+            <button class="step active" data-step="script">
+              <span>1</span>
+              <strong>先生成方案</strong>
+            </button>
+            <button class="step" data-step="style">
+              <span>2</span>
+              <strong>再看样图</strong>
+            </button>
+            <button class="step" data-step="publish">
+              <span>3</span>
+              <strong>最后拿结果</strong>
+            </button>
+          </div>
+
+          <section class="flow-section active-panel" data-panel="script">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Plan</p>
+                <h2>生成结果</h2>
+              </div>
+              <span class="section-badge" id="pageCount">等待生成</span>
+            </div>
+            <div class="copy-output" id="copyOutput">
+              <p>这里会显示标题、正文和每张图的大概内容。</p>
+            </div>
+            <div class="page-list" id="pageList"></div>
+          </section>
+
+          <section class="flow-section" data-panel="style">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Sample</p>
+                <h2>先看 2 张样图</h2>
+              </div>
+              <span class="section-badge">确认风格</span>
+            </div>
+            <div class="sample-grid" id="sampleGrid">
+              <div class="empty-state">第二步会出现封面和正文样图。</div>
+            </div>
+          </section>
+
+          <section class="flow-section" id="publishSection" data-panel="publish">
+            <div class="section-head">
+              <div>
+                <p class="eyebrow">Publish</p>
+                <h2>发布包</h2>
+              </div>
+              <span class="section-badge">图片 + 文案</span>
+            </div>
+            <pre class="publish-box" id="publishBox">等待生成全套图文后自动整理。</pre>
+          </section>
+        </section>
+
+        <aside class="preview-panel" aria-label="图文预览">
+          <div class="preview-head">
+            <div>
+              <p class="eyebrow">Preview</p>
+              <h2>3:4 图文预览</h2>
+            </div>
+            <span id="previewStatus">演示图</span>
+          </div>
+          <div class="phone-frame">
+            <div class="phone-screen" id="carouselPreview">
+              <div class="placeholder-card">
+                <span>封面预览</span>
+                <strong>先生成文案</strong>
+                <p>右侧会显示封面、正文页和完整图文。</p>
+              </div>
+            </div>
+          </div>
+          <div class="thumb-strip" id="thumbStrip"></div>
+        </aside>
+      </main>
+    </div>
+
+    <script src="./app.js?v=20260530-output"></script>
+  </body>
+</html>

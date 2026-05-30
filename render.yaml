@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: xhs-note-studio
+    env: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm run start:web
+    envVars:
+      - key: APP_MODE
+        value: web
+      - key: HOST
+        value: 0.0.0.0
+      - key: BANANAROUTER_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
