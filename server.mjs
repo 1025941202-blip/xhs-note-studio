@@ -465,8 +465,11 @@ function createZip(files) {
   return Buffer.concat([...localParts, ...centralParts, end]);
 }
 
-async function handleDownloadOutput(req, res) {
-  const body = await readJSON(req);
+async function handleDownloadOutput(req, res, url) {
+  const body =
+    req.method === "GET"
+      ? { sessionId: url.searchParams.get("sessionId") }
+      : await readJSON(req);
   const sessionId = assertSessionId(body.sessionId);
   const dir = outputSessionDir(sessionId);
   const manifest = await readOutputManifest(sessionId);
@@ -752,8 +755,8 @@ const server = createServer(async (req, res) => {
       await handleOpenOutput(req, res);
       return;
     }
-    if (req.method === "POST" && url.pathname === "/api/output/download") {
-      await handleDownloadOutput(req, res);
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/api/output/download") {
+      await handleDownloadOutput(req, res, url);
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/export/images") {
