@@ -325,6 +325,22 @@ function outputActionLabel() {
   return state.appMode === "web" ? "导出图片" : "打开文件夹";
 }
 
+function nextExportActionLabel() {
+  if (state.phase === "idle") return "开始生成方案";
+  if (state.phase === "script") return "下一步：生成 2 张样图";
+  if (state.phase === "style") return `确认，生成完整 ${state.pages.length || 7} 张`;
+  return "继续生成剩余图片";
+}
+
+function showExportNeedsImages() {
+  const targetStep = state.phase === "style" || state.maxStep === "style" ? "style" : "script";
+  showStep(targetStep);
+  const action = nextExportActionLabel();
+  els.nextTitle.textContent = "还没有可下载的图片";
+  els.nextText.textContent = `先点“${action}”，等图片生成出来后，再点“导出图片”。`;
+  toast(`还没有图片，先点“${action}”。`);
+}
+
 async function generateCopyAndPages() {
   const topic = cleanTopic(els.topic.value);
   const material = els.material.value.trim();
@@ -731,38 +747,19 @@ async function exportPackage() {
   }
 
   if (!savedCount()) {
-    showStep(state.samples.length ? "style" : "script");
-    toast("先生成图片，再导出图片包。");
+    showExportNeedsImages();
     return;
   }
 
-  setBusy(els.exportPackage, "打包中...");
+  setBusy(els.exportPackage, "准备下载...");
   try {
-    const response = await fetch("/api/output/download", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId: state.outputSession.sessionId,
-      }),
-    });
-    if (!response.ok) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || "导出失败");
-    }
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `${state.copy.title || "小红书图文"}.zip`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-    toast("图片包已开始下载。");
+    const sessionId = encodeURIComponent(state.outputSession.sessionId);
+    window.location.href = `/api/output/download?sessionId=${sessionId}`;
+    toast("已开始下载，请查看浏览器下载列表。");
   } catch (error) {
     toast(error.message || "导出失败");
   } finally {
-    restoreButton(els.exportPackage, outputActionLabel());
+    window.setTimeout(() => restoreButton(els.exportPackage, outputActionLabel()), 1200);
   }
 }
 
