@@ -2,7 +2,7 @@ services:
   - type: web
     name: xhs-note-studio
     env: node
-    plan: starter
+    plan: free
     buildCommand: npm install
     startCommand: npm run start:web
     envVars:
