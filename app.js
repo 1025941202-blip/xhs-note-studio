@@ -990,7 +990,8 @@ function updatePrimaryButton() {
   }
 
   if (state.phase === "style") {
-    els.primaryFlow.textContent = state.view === "style" ? `确认，生成完整 ${state.pages.length || "若干"} 张` : "回到第 2 步看样图";
+    els.primaryFlow.textContent =
+      state.view === "style" ? `确认，按方案生成 ${state.pages.length || "若干"} 张` : "回到第 2 步看样图";
     return;
   }
 
@@ -1017,7 +1018,7 @@ function updateGuide() {
       text:
         state.phase === "script"
           ? "点主按钮生成 3 套风格样图。点喜欢的样图选定风格，再生成完整套图。"
-          : `当前选择：${selectedVisualStyle()}。满意后再生成完整 ${state.pages.length || "若干"} 张。`,
+          : `当前选择：${selectedVisualStyle()}。满意后按方案生成 ${state.pages.length || "若干"} 张。`,
     },
     publish: {
       title: "第 3 步：拿完整结果",
