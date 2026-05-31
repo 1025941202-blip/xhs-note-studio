@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { createHmac, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, relative } from "node:path";
@@ -18,6 +19,10 @@ const image2TimeoutMs = Number(process.env.IMAGE2_TIMEOUT_MS || 240000);
 const outputRoot = join(root, "outputs");
 const appMode = process.env.APP_MODE === "web" ? "web" : "local";
 const host = process.env.HOST || (appMode === "web" ? "0.0.0.0" : "127.0.0.1");
+const accessPassword = String(process.env.ACCESS_PASSWORD || "").trim();
+const accessSecret = String(process.env.ACCESS_SECRET || accessPassword || "xhs-note-studio-local").trim();
+const accessCookieName = "xhs_access";
+const accessMaxAgeSeconds = 60 * 60 * 24 * 30;
 
 const contentTypes = {
   ".html": "text/html;charset=utf-8",
@@ -47,8 +52,8 @@ async function loadLocalEnv(filePath) {
   });
 }
 
-function sendJSON(res, status, body) {
-  res.writeHead(status, { "Content-Type": "application/json;charset=utf-8" });
+function sendJSON(res, status, body, headers = {}) {
+  res.writeHead(status, { "Content-Type": "application/json;charset=utf-8", ...headers });
   res.end(JSON.stringify(body));
 }
 
@@ -62,6 +67,106 @@ async function readJSON(req) {
   for await (const chunk of req) chunks.push(chunk);
   const body = Buffer.concat(chunks).toString("utf8");
   return body ? JSON.parse(body) : {};
+}
+
+function parseCookies(req) {
+  return String(req.headers.cookie || "")
+    .split(";")
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .reduce((cookies, part) => {
+      const separatorIndex = part.indexOf("=");
+      if (separatorIndex === -1) return cookies;
+      const key = decodeURIComponent(part.slice(0, separatorIndex).trim());
+      const value = decodeURIComponent(part.slice(separatorIndex + 1).trim());
+      cookies[key] = value;
+      return cookies;
+    }, {});
+}
+
+function stableDigest(value) {
+  return createHmac("sha256", "xhs-note-studio-access").update(String(value)).digest();
+}
+
+function safeCompare(left, right) {
+  return timingSafeEqual(stableDigest(left), stableDigest(right));
+}
+
+function accessSignature(issuedAt) {
+  return createHmac("sha256", accessSecret)
+    .update(`xhs-access:${issuedAt}:${accessPassword}`)
+    .digest("base64url");
+}
+
+function signAccessToken(issuedAt = Date.now()) {
+  return `${issuedAt}.${accessSignature(issuedAt)}`;
+}
+
+function verifyAccessToken(token) {
+  if (!accessPassword) return true;
+  const [issuedAt, signature] = String(token || "").split(".");
+  const issuedAtNumber = Number(issuedAt);
+  if (!issuedAt || !signature || !Number.isFinite(issuedAtNumber)) return false;
+  if (Date.now() - issuedAtNumber > accessMaxAgeSeconds * 1000) return false;
+  return safeCompare(signature, accessSignature(issuedAt));
+}
+
+function accessCookieHeader(req, token, maxAge = accessMaxAgeSeconds) {
+  const secure = appMode === "web" || req.headers["x-forwarded-proto"] === "https";
+  return `${accessCookieName}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? "; Secure" : ""}`;
+}
+
+function isAccessAllowed(req) {
+  if (!accessPassword) return true;
+  return verifyAccessToken(parseCookies(req)[accessCookieName]);
+}
+
+function requireAccess(req, res) {
+  if (isAccessAllowed(req)) return true;
+  sendJSON(res, 401, {
+    error: "请输入访问密码后再继续。",
+    accessRequired: true,
+  });
+  return false;
+}
+
+async function handleAccessStatus(req, res) {
+  sendJSON(res, 200, {
+    required: Boolean(accessPassword),
+    authorized: isAccessAllowed(req),
+  });
+}
+
+async function handleAccessLogin(req, res) {
+  if (!accessPassword) {
+    sendJSON(res, 200, { ok: true, required: false, authorized: true });
+    return;
+  }
+
+  const body = await readJSON(req);
+  if (!safeCompare(body.password || "", accessPassword)) {
+    sendJSON(res, 401, {
+      error: "访问密码不正确。",
+      accessRequired: true,
+    });
+    return;
+  }
+
+  sendJSON(
+    res,
+    200,
+    { ok: true, required: true, authorized: true },
+    { "Set-Cookie": accessCookieHeader(req, signAccessToken()) }
+  );
+}
+
+async function handleAccessLogout(req, res) {
+  sendJSON(
+    res,
+    200,
+    { ok: true },
+    { "Set-Cookie": accessCookieHeader(req, "", 0) }
+  );
 }
 
 function safeStaticPath(pathname) {
@@ -84,6 +189,20 @@ function allowedStaticPath(filePath) {
     return [".png", ".jpg", ".jpeg", ".webp"].includes(extname(filePath).toLowerCase());
   }
   return false;
+}
+
+function isOutputStaticPath(filePath) {
+  const relativePath = relative(root, filePath);
+  return relativePath.startsWith("outputs/") && isInside(outputRoot, filePath);
+}
+
+function isProtectedApiPath(pathname) {
+  return (
+    pathname.startsWith("/api/image2/") ||
+    pathname.startsWith("/api/copy/") ||
+    pathname.startsWith("/api/output/") ||
+    pathname.startsWith("/api/export/")
+  );
 }
 
 async function handleModels(_req, res) {
@@ -648,6 +767,7 @@ async function handleStatic(req, res) {
     sendJSON(res, 404, { error: "Not found." });
     return;
   }
+  if (isOutputStaticPath(filePath) && !requireAccess(req, res)) return;
   try {
     const data = await readFile(filePath);
     const type = contentTypes[extname(filePath)] || "application/octet-stream";
@@ -661,6 +781,19 @@ async function handleStatic(req, res) {
 const server = createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
+    if (req.method === "GET" && url.pathname === "/api/access/status") {
+      await handleAccessStatus(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/access/login") {
+      await handleAccessLogin(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/access/logout") {
+      await handleAccessLogout(req, res);
+      return;
+    }
+    if (isProtectedApiPath(url.pathname) && !requireAccess(req, res)) return;
     if (req.method === "GET" && url.pathname === "/api/app/status") {
       await handleAppStatus(req, res);
       return;
@@ -717,6 +850,7 @@ const server = createServer(async (req, res) => {
 
 server.listen(port, host, () => {
   console.log(`小红书图文生产台已启动：http://${host}:${port}/`);
+  console.log(accessPassword ? "Access gate: enabled" : "Access gate: disabled");
   console.log(apiKey ? "Image2 proxy: configured" : "Image2 proxy: missing BANANAROUTER_API_KEY");
   console.log(deepseekApiKey ? `DeepSeek copy: configured (${deepseekModel})` : "DeepSeek copy: missing DEEPSEEK_API_KEY");
 });
