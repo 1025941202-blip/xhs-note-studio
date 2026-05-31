@@ -6,9 +6,10 @@
 
 - 一个 GitHub 仓库
 - 一个 Render 账号
-- 两个服务端环境变量：
+- 三个服务端环境变量：
   - `BANANAROUTER_API_KEY`
   - `DEEPSEEK_API_KEY`
+  - `ACCESS_PASSWORD`
 
 不要把 API Key 写进代码、README 或前端文件。
 
@@ -22,6 +23,7 @@
 6. 创建时填入：
    - `BANANAROUTER_API_KEY`
    - `DEEPSEEK_API_KEY`
+   - `ACCESS_PASSWORD`
 7. 创建后等待部署完成。
 8. 打开 Render 给出的 `onrender.com` 地址。
 
@@ -32,9 +34,10 @@
 - `APP_MODE=web`
 - `HOST=0.0.0.0`
 - 启动命令：`npm run start:web`
+- `ACCESS_PASSWORD` 设置后，公网访问会先显示密码页
 
 公网模式下，用户看到的是“导出图片”按钮，点击会下载 zip 图片包。
 
 ## 重要限制
 
-当前版本没有登录和用量限制。正式给外部用户使用前，建议至少加一个访问码，否则别人生成图片会消耗你的 Image2 和 DeepSeek 额度。
+当前版本是共享访问密码，不是用户账号系统。适合小范围内测；如果后面要开放给更多人，建议再加账号、额度和生成记录。

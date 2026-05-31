@@ -7,7 +7,21 @@
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <div class="app">
+    <div class="access-gate" id="accessGate" hidden>
+      <form class="access-card" id="accessForm">
+        <p class="eyebrow">Private Beta</p>
+        <h1>输入访问密码</h1>
+        <p>这个生产台暂时只开放给授权用户使用。</p>
+        <label class="access-field">
+          <span>访问密码</span>
+          <input id="accessPassword" type="password" autocomplete="current-password" placeholder="请输入密码" />
+        </label>
+        <p class="access-error" id="accessError" aria-live="polite"></p>
+        <button class="primary" type="submit">进入生产台</button>
+      </form>
+    </div>
+
+    <div class="app" id="appShell">
       <header class="topbar">
         <div>
           <p class="eyebrow">Xiaohongshu Note Studio</p>
@@ -157,6 +171,6 @@
       </main>
     </div>
 
-    <script type="module" src="./app.js?v=20260531-style-groups"></script>
+    <script type="module" src="./app.js?v=20260601-access-gate"></script>
   </body>
 </html>
