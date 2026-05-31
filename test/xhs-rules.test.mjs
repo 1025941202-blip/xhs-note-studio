@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   buildCopyPrompt,
   buildImagePrompt,
+  buildVisualContract,
   getSampleStyleOptions,
   normalizeCopyPackage,
 } from "../xhs-rules.mjs";
@@ -41,6 +42,11 @@ test("normalization keeps DeepSeek page count and only caps at Xiaohongshu limit
 });
 
 test("full image prompt locks the carousel into one visual system", () => {
+  const visualContract = buildVisualContract("极简白底工具书风", [
+    { type: "cover", title: "AI 做图总翻车？" },
+    { type: "body", title: "原因 1：没有说清楚用户是谁" },
+    { type: "ending", title: "按这张清单改" },
+  ]);
   const prompt = buildImagePrompt(
     {
       type: "body",
@@ -55,6 +61,7 @@ test("full image prompt locks the carousel into one visual system", () => {
       mode: "full",
       pageIndex: 2,
       totalPages: 6,
+      visualContract,
       pagePlan: [
         { type: "cover", title: "AI 做图总翻车？" },
         { type: "body", title: "原因 1：没有说清楚用户是谁" },
@@ -68,4 +75,6 @@ test("full image prompt locks the carousel into one visual system", () => {
   assert.match(prompt, /统一设计系统/);
   assert.match(prompt, /系列母版/);
   assert.match(prompt, /禁止每页换背景/);
+  assert.match(prompt, /视觉母版锁定/);
+  assert.match(prompt, /全套页数与目录/);
 });

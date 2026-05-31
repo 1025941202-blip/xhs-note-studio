@@ -7,6 +7,8 @@ const sampleStyles = [
       "浅暖白背景，像清爽教程笔记和信息卡片的结合；亲近、小白友好，但成熟、克制、专业。",
     system:
       "背景 #f7f3ea，主文字 #252927，辅助文字 #68706b，强调色 #f2bd2f；统一使用细线信息卡、浅色便签块、克制手绘箭头，圆角 18px 左右，阴影很轻。",
+    master:
+      "固定浅暖白底；顶部用小栏目标签和页码；主标题左上对齐；中间一张浅色信息卡；底部 2-3 条要点。装饰只允许细线箭头、浅黄高亮和便签块。",
   },
   {
     id: "minimal-workbook",
@@ -16,6 +18,8 @@ const sampleStyles = [
       "白底、黑灰文字、少量黄绿色标注，像一本清楚的 AI 工具说明书；信息密度更高，页面更利落。",
     system:
       "背景 #fbfbf7，主文字 #1f2422，辅助文字 #666f69，强调色 #b7d66f 与 #f1c84b；统一使用网格排版、细边框模块、编号标签、流程线，几乎不使用贴纸。",
+    master:
+      "固定白底工具书版式；顶部小号编号标签；主标题粗黑；中间用网格信息模块；底部用流程线或检查清单。装饰只允许细线、编号、浅黄绿标注。",
   },
   {
     id: "contrast-card",
@@ -25,6 +29,8 @@ const sampleStyles = [
       "标题更有冲击力，白底或浅灰底，红黄只作为警示点缀；点击感强，但保持高级克制。",
     system:
       "背景 #f5f2ea，主文字 #171a18，辅助文字 #606762，强调色 #ef4444 与 #f6c445；统一使用强标题区、警示小标签、粗细对比线条、少量红黄提示块，避免廉价营销海报。",
+    master:
+      "固定浅灰白底；顶部强标题区；中间一张重点信息卡；底部 2-3 个红黄警示标签。红黄只做强调，不大面积铺满，不改成促销海报。",
   },
   {
     id: "dark-workbook",
@@ -34,6 +40,8 @@ const sampleStyles = [
       "深色背景，专业、清爽、有 AI 工具感；用蓝白或青色点缀，强调长期栏目质感。",
     system:
       "背景 #12161d，主文字 #f4f7fb，辅助文字 #aeb8c5，强调色 #58c7f3 与 #d7f36b；统一使用深色面板、荧光细线、工具栏标签、清晰模块分区。",
+    master:
+      "固定深色工具面板；顶部工具栏标签和页码；主标题高亮；中间用深色分区卡片；底部用荧光细线总结。所有页面保持同一深色面板质感。",
   },
 ];
 
@@ -68,6 +76,23 @@ function formatPagePlan(pages = []) {
     .join(" / ");
 }
 
+export function buildVisualContract(style = "", pages = []) {
+  const styleGuide = getStyleGuide(style);
+  const pagePlan = formatPagePlan(pages);
+
+  return [
+    `视觉母版锁定：${styleGuide.name}`,
+    `固定设计系统：${styleGuide.system}`,
+    `固定页面骨架：${styleGuide.master}`,
+    pagePlan ? `全套页数与目录：共 ${Math.min(pages.length, 18)} 页；${pagePlan}` : "",
+    "一致性要求：这是一整套连续图文，不是单张海报。每一页必须沿用同一背景、同一主色、同一字体感觉、同一信息卡形状、同一页码位置、同一边距和留白节奏。",
+    "允许变化：只替换本页标题、要点、局部图标和信息卡内部内容。封面可以更有标题冲击力，但仍然必须像同一套模板的封面。",
+    "禁止变化：不要换成新背景、新主色、新插画风格、新卡片样式、新字体层级；不要一页像手账、一页像PPT、一页像营销海报。",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export function buildImagePrompt(page, style, context = {}) {
   const styleGuide = getStyleGuide(style);
   const pageIndex = Number(context.pageIndex || 1);
@@ -75,11 +100,13 @@ export function buildImagePrompt(page, style, context = {}) {
   const mode = context.mode || "full";
   const points = Array.isArray(page.points) ? page.points.filter(Boolean) : [];
   const pagePlan = Array.isArray(context.pagePlan) ? formatPagePlan(context.pagePlan) : "";
+  const visualContract = context.visualContract || buildVisualContract(style, context.pagePlan || []);
 
   return [
     "生成一张小红书竖版图文页面，比例 3:4，适合手机阅读。",
     `这是同一套小红书图文笔记的第 ${pageIndex} / ${totalPages} 页，模式：${mode === "sample" ? "风格样片" : "完整套图"}。`,
     pagePlan ? `全套页面目录：${pagePlan}` : "",
+    visualContract,
     `视觉风格：${styleGuide.name}。${styleGuide.description}`,
     `统一设计系统：${styleGuide.system}`,
     `页面类型：${page.type === "cover" ? "封面" : page.type === "ending" ? "结尾页" : "正文页"}`,
