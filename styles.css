@@ -578,6 +578,7 @@ select:focus {
 }
 
 .sample-card {
+  position: relative;
   aspect-ratio: 3 / 4;
   padding: 0;
   overflow: hidden;
@@ -585,6 +586,32 @@ select:focus {
   border-radius: 22px;
   background: var(--surface);
   box-shadow: var(--shadow-soft);
+}
+
+.sample-card.active {
+  border-color: rgba(45, 45, 42, 0.48);
+  box-shadow:
+    0 0 0 2px rgba(255, 198, 55, 0.74),
+    var(--shadow-soft);
+}
+
+.sample-label {
+  position: absolute;
+  z-index: 2;
+  top: 10px;
+  left: 10px;
+  max-width: calc(100% - 20px);
+  padding: 6px 8px;
+  border-radius: 999px;
+  color: var(--ink);
+  background: rgba(255, 255, 255, 0.82);
+  font-size: 11px;
+  font-weight: 760;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  backdrop-filter: blur(10px);
 }
 
 .sample-card .note-artwork {
