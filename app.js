@@ -1,3 +1,5 @@
+import { buildImagePrompt, getSampleStyleOptions } from "./xhs-rules.mjs";
+
 const $ = (selector) => document.querySelector(selector);
 
 const els = {
@@ -35,6 +37,7 @@ const state = {
   images: [],
   previewItems: [],
   selectedIndex: 0,
+  selectedStyle: "",
   outputSession: null,
   savedPages: {},
 };
@@ -107,15 +110,30 @@ async function readCachedPageImage(pageIndex) {
 
 const image2Provider = {
   name: "image2-gpt-image-2",
-  async generate({ pages, style, mode, startIndex = 0, onProgress = () => {}, onGenerated = async () => {} }) {
+  async generate({
+    pages,
+    style,
+    mode,
+    pagePlan,
+    startIndex = 0,
+    progressTotal,
+    promptTotalPages,
+    onProgress = () => {},
+    onGenerated = async () => {},
+  }) {
     const results = [];
     for (let index = 0; index < pages.length; index += 1) {
       const page = pages[index];
-      const prompt = buildImagePrompt(page, style);
       const pageIndex = startIndex + index + 1;
+      const prompt = buildImagePrompt(page, style, {
+        mode,
+        pageIndex,
+        totalPages: promptTotalPages || progressTotal || startIndex + pages.length,
+        pagePlan,
+      });
       onProgress({
         current: pageIndex,
-        total: startIndex + pages.length,
+        total: progressTotal || startIndex + pages.length,
         title: page.title,
       });
       const response = await fetch("/api/image2/generate", {
@@ -192,6 +210,16 @@ function cleanTopic(topic) {
   return topic.trim() || "AI 做图总翻车的 3 个原因";
 }
 
+function selectedVisualStyle() {
+  return state.selectedStyle || els.style.value;
+}
+
+function setSelectedStyle(style) {
+  state.selectedStyle = style || els.style.value;
+  const matchingOption = [...els.style.options].find((option) => option.value === state.selectedStyle);
+  if (matchingOption) els.style.value = state.selectedStyle;
+}
+
 function savedPageFor(index) {
   return state.savedPages[String(index)] || state.savedPages[index];
 }
@@ -231,7 +259,7 @@ ${imageLines}
 ${state.copy.hashtags.map((tag) => `#${tag}`).join(" ")}
 
 ## 备注
-- 风格：${els.style.value}
+- 风格：${selectedVisualStyle()}
 - 图片尺寸：3:4
 - 文案生成：${copyProvider.name}
 - 生成方式：${image2Provider.name}
@@ -244,6 +272,7 @@ function persistDraft() {
     material: els.material.value,
     persona: els.persona.value,
     style: els.style.value,
+    selectedStyle: selectedVisualStyle(),
     phase: state.phase,
     maxStep: state.maxStep,
     copy: state.copy,
@@ -265,6 +294,7 @@ function restoreDraft() {
     els.material.value = draft.material || els.material.value;
     els.persona.value = draft.persona || els.persona.value;
     els.style.value = draft.style || els.style.value;
+    setSelectedStyle(draft.selectedStyle || draft.style || els.style.value);
     state.copy = draft.copy;
     state.pages = draft.pages;
     state.outputSession = draft.outputSession || null;
@@ -299,7 +329,7 @@ async function createOrUpdateOutputSession(sessionId) {
       imageProvider: image2Provider.name,
     },
     pages: state.pages,
-    style: els.style.value,
+    style: selectedVisualStyle(),
     publishText: publishText(),
   };
   if (sessionId) body.sessionId = sessionId;
@@ -351,6 +381,8 @@ async function savePageImage(item, pageIndex) {
       title: item.page.title,
       imageUrl: item.imageUrl,
       prompt: item.prompt,
+      mode: item.mode || "full",
+      style: item.style || selectedVisualStyle(),
     }),
   });
   const payload = await response.json();
@@ -378,7 +410,7 @@ function buildSavedPreviewItems() {
         id: `full-${index + 1}`,
         pageIndex: index + 1,
         mode: "full",
-        style: els.style.value,
+        style: selectedVisualStyle(),
         page,
         imageUrl,
         html: renderImageArtwork(page, imageUrl),
@@ -406,7 +438,7 @@ async function hydrateCachedImages() {
       id: `full-${pageIndex}`,
       pageIndex,
       mode: "full",
-      style: els.style.value,
+      style: selectedVisualStyle(),
       page,
       imageUrl,
       html: renderImageArtwork(page, imageUrl),
@@ -463,8 +495,8 @@ function outputActionLabel() {
 
 function nextExportActionLabel() {
   if (state.phase === "idle") return "开始生成方案";
-  if (state.phase === "script") return "下一步：生成 2 张样图";
-  if (state.phase === "style") return `确认，生成完整 ${state.pages.length || 7} 张`;
+  if (state.phase === "script") return "下一步：生成 3 套样图";
+  if (state.phase === "style") return `确认，生成完整 ${state.pages.length || "若干"} 张`;
   return "继续生成剩余图片";
 }
 
@@ -482,6 +514,7 @@ async function generateCopyAndPages() {
   const material = els.material.value.trim();
   const persona = els.persona.value;
   const style = els.style.value;
+  setSelectedStyle(style);
 
   setBusy(els.primaryFlow, "DeepSeek 写文案中...");
   try {
@@ -499,6 +532,7 @@ async function generateCopyAndPages() {
     state.pages = result.pages || [];
     state.samples = [];
     state.images = [];
+    setSelectedStyle(style);
     state.outputSession = null;
     state.savedPages = {};
     state.previewItems = state.pages.map((page, index) => ({
@@ -579,23 +613,41 @@ function renderPages() {
 async function generateStyleSamples() {
   if (!(await ensureScript())) return;
   await ensureOutputSession();
-  setBusy(els.primaryFlow, "生成样图中...");
+  const styleOptions = getSampleStyleOptions(els.style.value);
+  const bodyPage = state.pages.find((page) => page.type !== "cover") || state.pages[1] || state.pages[0];
+  const samplePages = [state.pages[0], bodyPage].filter(Boolean);
+  const totalSamples = styleOptions.length * samplePages.length;
+  setBusy(els.primaryFlow, "生成 3 套样图中...");
   try {
-    const samplePages = [state.pages[0], state.pages[1]];
-    state.samples = await image2Provider.generate({
-      pages: samplePages,
-      style: els.style.value,
-      mode: "sample",
-      onProgress: ({ current, total }) => {
-        els.primaryFlow.textContent = `生成并保存样图... ${current}/${total}`;
-        els.publishBox.textContent = `正在生成第 ${current}/${state.pages.length} 张：样图会先保存到本地文件夹。`;
-      },
-      onGenerated: async (item, pageIndex) => {
-        await savePageImage(item, pageIndex);
-      },
-    });
-    await refreshOutputSession();
-    state.previewItems = state.samples;
+    state.samples = [];
+    let generatedCount = 0;
+    for (const option of styleOptions) {
+      const items = await image2Provider.generate({
+        pages: samplePages,
+        style: option.name,
+        mode: "sample",
+        pagePlan: samplePages,
+        startIndex: generatedCount,
+        progressTotal: totalSamples,
+        promptTotalPages: samplePages.length,
+        onProgress: ({ current, total, title }) => {
+          els.primaryFlow.textContent = `生成样图... ${current}/${total}`;
+          els.publishBox.textContent = `正在生成「${option.label}」样图：${title}\n\n先看风格，不会占用最终套图页数。`;
+        },
+      });
+      state.samples.push(
+        ...items.map((item, index) => ({
+          ...item,
+          id: `sample-${option.id}-${index + 1}`,
+          sampleStyle: option,
+          samplePageRole: index === 0 ? "封面" : "正文",
+        }))
+      );
+      generatedCount += samplePages.length;
+      renderSampleGrid();
+    }
+    setSelectedStyle(styleOptions[0].name);
+    state.previewItems = state.samples.filter((item) => item.style === selectedVisualStyle());
     state.selectedIndex = 0;
     renderPages();
     renderSampleGrid();
@@ -604,7 +656,7 @@ async function generateStyleSamples() {
     state.phase = "style";
     state.maxStep = "style";
     showStep("style");
-    toast("样图已生成，并保存到输出文件夹。");
+    toast("3 套样图已生成，点喜欢的样图就会作为最终风格。");
   } catch (error) {
     state.maxStep = "style";
     renderSampleError(error.message || "Image2 样图生成失败");
@@ -648,12 +700,16 @@ async function generateFullNote() {
 
   setBusy(els.primaryFlow, `继续生成... ${savedCount()}/${state.pages.length}`);
   try {
+    const finalStyle = selectedVisualStyle();
     for (const { page, pageIndex } of missingPages) {
       await image2Provider.generate({
         pages: [page],
-        style: els.style.value,
+        style: finalStyle,
         mode: "full",
+        pagePlan: state.pages,
         startIndex: pageIndex - 1,
+        progressTotal: state.pages.length,
+        promptTotalPages: state.pages.length,
         onProgress: ({ current, title }) => {
           els.primaryFlow.textContent = `生成并保存... ${current}/${state.pages.length}`;
           els.publishBox.textContent = `正在生成第 ${current}/${state.pages.length} 张：${title}\n\n成功一张就会立刻保存。中途卡住后，再点主按钮会继续补剩下的。`;
@@ -700,14 +756,15 @@ async function ensureScript() {
 
 function renderSamplesEmpty() {
   els.sampleGrid.innerHTML =
-    '<div class="empty-state">生成样图后，会出现 1 张封面和 1 张正文页。</div>';
+    '<div class="empty-state">生成样图后，会出现 3 套风格，每套包含封面和正文页。</div>';
 }
 
 function renderSampleGrid() {
   els.sampleGrid.innerHTML = state.samples
     .map(
       (item, index) => `
-        <button class="sample-card" data-index="${index}" aria-label="查看样图 ${index + 1}">
+        <button class="sample-card ${item.style === selectedVisualStyle() ? "active" : ""}" data-index="${index}" aria-label="查看样图 ${index + 1}">
+          <span class="sample-label">${escapeHTML(item.sampleStyle?.label || item.style)} · ${escapeHTML(item.samplePageRole || "")}</span>
           ${item.html}
         </button>
       `
@@ -716,9 +773,16 @@ function renderSampleGrid() {
 
   els.sampleGrid.querySelectorAll(".sample-card").forEach((button) => {
     button.addEventListener("click", () => {
-      state.previewItems = state.samples;
-      state.selectedIndex = Number(button.dataset.index);
+      const selectedSample = state.samples[Number(button.dataset.index)];
+      setSelectedStyle(selectedSample?.style || els.style.value);
+      state.previewItems = state.samples.filter((item) => item.style === selectedVisualStyle());
+      state.selectedIndex = Math.max(0, state.previewItems.findIndex((item) => item.id === selectedSample?.id));
+      persistDraft();
+      renderSampleGrid();
       renderPreview();
+      updatePrimaryButton();
+      updateGuide();
+      toast(`已选择：${selectedVisualStyle()}`);
     });
   });
 }
@@ -746,7 +810,12 @@ function renderPreview() {
 
   const item = items[state.selectedIndex] || items[0];
   els.preview.innerHTML = item.html;
-  els.previewStatus.textContent = item.mode === "full" ? "Image2 全套" : item.mode === "sample" ? "Image2 样图" : "方案预览";
+  els.previewStatus.textContent =
+    item.mode === "full"
+      ? `Image2 全套 · ${selectedVisualStyle()}`
+      : item.mode === "sample"
+      ? `Image2 样图 · ${selectedVisualStyle()}`
+      : "方案预览";
 
   els.thumbStrip.innerHTML = items
     .map(
@@ -802,48 +871,6 @@ function renderImageArtwork(page, imageUrl) {
       <img src="${escapeHTML(imageUrl)}" alt="${escapeHTML(page.title)}" />
     </div>
   `;
-}
-
-function buildImagePrompt(page, style) {
-  const styleGuide = getStyleGuide(style);
-  return [
-    "生成一张小红书竖版图文页面，比例 3:4，适合手机阅读。",
-    `视觉风格：${styleGuide.name}。${styleGuide.description}`,
-    `页面标题：${page.title}`,
-    `副标题：${page.subtitle}`,
-    `页面备注：${page.note || ""}`,
-    `画面意图：${page.visualIntent || ""}`,
-    `页面要点：${page.points.join("；")}`,
-    "受众：内容创作者、AI 工具学习者、小红书新手。整体要像成熟创作者的教程栏目，不像儿童手账。",
-    "必须做到：中文标题和要点清晰可读，不要错字，不要乱码；标题醒目；正文页能承载信息；封面和正文像同一套账号栏目。",
-    "版式：上方大标题，中间用简洁信息卡片、流程线、轻量图标解释，底部放 2-3 条要点。",
-    "禁止：不要卡通动物，不要可爱玩偶，不要幼稚贴纸，不要儿童绘本风，不要过度圆润 Q 版角色，不要廉价营销海报。",
-    "画面语言：留白干净，边框克制，装饰少而准；可用细线手绘箭头、便签式信息块、淡色高亮，但不要堆贴纸。",
-  ].join("\n");
-}
-
-function getStyleGuide(style) {
-  if (style.includes("深色")) {
-    return {
-      name: "深色工具书风",
-      description:
-        "深色背景，专业、清爽、有 AI 工具感；用蓝白或青色点缀，强调长期栏目质感。",
-    };
-  }
-
-  if (style.includes("高对比")) {
-    return {
-      name: "高对比流量风",
-      description:
-        "标题冲击强，白底或浅灰底，红黄只作为警示点缀；点击感强，但保持高级克制。",
-    };
-  }
-
-  return {
-    name: "浅色轻手账信息卡风",
-    description:
-      "浅色背景，像清爽教程笔记和信息卡片的结合；亲近、小白友好，但必须成熟、克制、专业。",
-  };
 }
 
 function renderPublishBox() {
@@ -958,12 +985,12 @@ function updatePrimaryButton() {
   }
 
   if (state.phase === "script") {
-    els.primaryFlow.textContent = "下一步：生成 2 张样图";
+    els.primaryFlow.textContent = "下一步：生成 3 套样图";
     return;
   }
 
   if (state.phase === "style") {
-    els.primaryFlow.textContent = state.view === "style" ? `确认，生成完整 ${state.pages.length || 7} 张` : "回到第 2 步看样图";
+    els.primaryFlow.textContent = state.view === "style" ? `确认，生成完整 ${state.pages.length || "若干"} 张` : "回到第 2 步看样图";
     return;
   }
 
@@ -983,14 +1010,14 @@ function updateGuide() {
       text:
         state.phase === "idle"
           ? "填完左边两项，点主按钮。DeepSeek 会先生成标题、正文、话题和每张图的大概内容。"
-          : "这里是标题、正文和 7 张图的拆页方案。想改选题或素材，就改左边后重新生成。",
+          : `这里是标题、正文和 ${state.pages.length || "若干"} 张图的拆页方案。想改选题或素材，就改左边后重新生成。`,
     },
     style: {
-      title: "第 2 步：先看 2 张样图",
+      title: "第 2 步：先看 3 套样图",
       text:
         state.phase === "script"
-          ? "点主按钮生成封面和正文页样图。满意再进入下一步，不满意就回第 1 步改素材或风格。"
-          : "这是 Image2 生成的风格样图。满意后再生成完整 7 张。",
+          ? "点主按钮生成 3 套风格样图。点喜欢的样图选定风格，再生成完整套图。"
+          : `当前选择：${selectedVisualStyle()}。满意后再生成完整 ${state.pages.length || "若干"} 张。`,
     },
     publish: {
       title: "第 3 步：拿完整结果",
@@ -1101,10 +1128,16 @@ function toast(message) {
 
 els.primaryFlow.addEventListener("click", runPrimaryFlow);
 els.exportPackage.addEventListener("click", exportPackage);
+els.style.addEventListener("change", () => {
+  setSelectedStyle(els.style.value);
+  persistDraft();
+  updateGuide();
+});
 els.steps.querySelectorAll(".step").forEach((step) => {
   step.addEventListener("click", () => showStep(step.dataset.step));
 });
 
+setSelectedStyle(els.style.value);
 restoreDraft();
 updatePrimaryButton();
 updateGuide();

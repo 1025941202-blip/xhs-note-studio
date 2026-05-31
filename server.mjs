@@ -3,6 +3,7 @@ import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { buildCopyPrompt, normalizeCopyPackage } from "./xhs-rules.mjs";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 await loadLocalEnv(join(root, ".env.local"));
@@ -75,7 +76,7 @@ function isInside(parent, child) {
 }
 
 function allowedStaticPath(filePath) {
-  const publicFiles = new Set(["index.html", "app.js", "styles.css"]);
+  const publicFiles = new Set(["index.html", "app.js", "styles.css", "xhs-rules.mjs"]);
   const relativePath = relative(root, filePath);
   if (publicFiles.has(relativePath)) return true;
   if (relativePath.startsWith(".") || relativePath.split("/").some((part) => part.startsWith("."))) return false;
@@ -346,6 +347,8 @@ async function handleSaveOutputPage(req, res) {
     savedAt: new Date().toISOString(),
     webPath: outputWebPath(sessionId, filename),
     prompt: body.prompt || "",
+    mode: body.mode || "full",
+    style: body.style || manifest.style || "",
   };
 
   const savedPages = {
@@ -558,38 +561,6 @@ async function handleExportImages(req, res) {
   });
 }
 
-function buildCopyPrompt({ topic, material, persona, style }) {
-  return [
-    "你是小红书图文内容策划和文案编辑。请根据用户给的选题和语料，生成一份可确认的小红书图文发布包草稿。",
-    "",
-    "输出必须是严格 JSON，不要 Markdown，不要解释。",
-    "JSON 字段：",
-    "{",
-    '  "title": "小红书发布标题，适合正文发布",',
-    '  "coverTitle": "封面主标题，短、强、有点击理由",',
-    '  "opening": "正文开头 1-2 句",',
-    '  "body": "完整正文，口语化，有信息量，不要油腻营销",',
-    '  "hashtags": ["话题1", "话题2"],',
-    '  "pages": [',
-    '    { "type": "cover|body|ending", "title": "页面标题", "subtitle": "页面副标题", "note": "页面备注", "points": ["2-4 个要点"], "visualIntent": "这一页画面应该表达什么" }',
-    "  ]",
-    "}",
-    "",
-    "要求：",
-    "- 默认拆成 7 页：1 张封面、5 张正文页、1 张结尾页。",
-    "- 每页标题要短，适合直接放在图上。",
-    "- 正文页要能承载信息，不要只是情绪口号。",
-    "- 话题 5-8 个，不要带 # 符号。",
-    "- 风格要适配小红书，但不要幼稚、不要廉价营销感。",
-    "- 如果语料不足，可以合理补全，但不要编造具体数据或案例。",
-    "",
-    `选题：${topic}`,
-    `语料：${material}`,
-    `账号感觉：${persona}`,
-    `图片风格：${style}`,
-  ].join("\n");
-}
-
 function extractJSON(text) {
   const trimmed = String(text || "").trim();
   if (!trimmed) throw new Error("DeepSeek 没有返回文案内容");
@@ -600,35 +571,6 @@ function extractJSON(text) {
     if (!match) throw new Error("DeepSeek 返回内容不是 JSON");
     return JSON.parse(match[0]);
   }
-}
-
-function normalizeCopyPackage(value) {
-  const pages = Array.isArray(value.pages) ? value.pages : [];
-  if (!value.title || !value.body || !pages.length) {
-    throw new Error("DeepSeek 返回的文案包缺少标题、正文或拆页");
-  }
-
-  return {
-    title: String(value.title).trim(),
-    coverTitle: String(value.coverTitle || value.title).trim(),
-    opening: String(value.opening || "").trim(),
-    body: String(value.body).trim(),
-    hashtags: (Array.isArray(value.hashtags) ? value.hashtags : [])
-      .map((tag) => String(tag).replace(/^#/, "").trim())
-      .filter(Boolean)
-      .slice(0, 8),
-    pages: pages.slice(0, 18).map((page, index) => ({
-      type: ["cover", "body", "ending"].includes(page.type) ? page.type : index === 0 ? "cover" : "body",
-      title: String(page.title || `第 ${index + 1} 页`).trim(),
-      subtitle: String(page.subtitle || "").trim(),
-      note: String(page.note || "").trim(),
-      points: (Array.isArray(page.points) ? page.points : [])
-        .map((point) => String(point).trim())
-        .filter(Boolean)
-        .slice(0, 4),
-      visualIntent: String(page.visualIntent || "").trim(),
-    })),
-  };
 }
 
 async function handleCopyStatus(_req, res) {
