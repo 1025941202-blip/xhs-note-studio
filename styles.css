@@ -55,6 +55,7 @@ body {
 
 button,
 textarea,
+input,
 select {
   font: inherit;
 }
@@ -68,6 +69,67 @@ button {
   min-height: 100vh;
   padding: 22px;
   position: relative;
+}
+
+.app.access-locked {
+  pointer-events: none;
+  user-select: none;
+  filter: blur(10px);
+}
+
+.access-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(236, 235, 232, 0.78);
+  backdrop-filter: blur(22px);
+}
+
+.access-gate[hidden] {
+  display: none;
+}
+
+.access-card {
+  width: min(420px, 100%);
+  padding: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.68);
+  border-radius: var(--radius);
+  background: rgba(246, 245, 242, 0.9);
+  box-shadow: var(--shadow);
+}
+
+.access-card h1 {
+  margin-bottom: 10px;
+  font-size: 30px;
+}
+
+.access-card > p:not(.eyebrow):not(.access-error) {
+  margin-bottom: 24px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+
+.access-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.access-field span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.access-error {
+  min-height: 22px;
+  margin-bottom: 14px;
+  color: #b15f00;
+  font-size: 13px;
+  line-height: 1.5;
 }
 
 .app::before {
@@ -218,6 +280,7 @@ h2 {
 }
 
 textarea,
+input,
 select {
   width: 100%;
   border: 1px solid rgba(255, 255, 255, 0.56);
@@ -240,7 +303,13 @@ select {
   padding: 0 12px;
 }
 
+input {
+  min-height: 46px;
+  padding: 0 13px;
+}
+
 textarea:focus,
+input:focus,
 select:focus {
   border-color: rgba(255, 198, 55, 0.66);
   box-shadow:
@@ -341,7 +410,8 @@ select:focus {
   transform: none;
 }
 
-.actions .primary {
+.actions .primary,
+.access-card .primary {
   color: #5c4200;
   background: linear-gradient(180deg, #ffdc70, var(--accent));
   border-color: rgba(255, 255, 255, 0.55);
@@ -350,7 +420,8 @@ select:focus {
     -8px -8px 18px rgba(255, 255, 255, 0.72);
 }
 
-.actions .primary:hover {
+.actions .primary:hover,
+.access-card .primary:hover {
   background: linear-gradient(180deg, #ffe38d, #ffc021);
 }
 
