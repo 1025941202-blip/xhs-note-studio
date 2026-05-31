@@ -39,6 +39,72 @@ const state = {
   savedPages: {},
 };
 
+const imageCacheConfig = {
+  dbName: "xhs-note-studio-image-cache",
+  storeName: "pages",
+};
+
+function imageCacheKey(sessionId, pageIndex) {
+  return `${sessionId}:${pageIndex}`;
+}
+
+function openImageCache() {
+  if (!("indexedDB" in window)) return Promise.resolve(null);
+
+  return new Promise((resolve) => {
+    const request = indexedDB.open(imageCacheConfig.dbName, 1);
+
+    request.onupgradeneeded = () => {
+      request.result.createObjectStore(imageCacheConfig.storeName, { keyPath: "key" });
+    };
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => resolve(null);
+    request.onblocked = () => resolve(null);
+  });
+}
+
+async function cachePageImage(pageIndex, imageUrl) {
+  if (!state.outputSession?.sessionId || !String(imageUrl || "").startsWith("data:image/")) return false;
+  const db = await openImageCache();
+  if (!db) return false;
+
+  return new Promise((resolve) => {
+    const tx = db.transaction(imageCacheConfig.storeName, "readwrite");
+    tx.objectStore(imageCacheConfig.storeName).put({
+      key: imageCacheKey(state.outputSession.sessionId, pageIndex),
+      sessionId: state.outputSession.sessionId,
+      pageIndex,
+      imageUrl,
+      updatedAt: new Date().toISOString(),
+    });
+    tx.oncomplete = () => {
+      db.close();
+      resolve(true);
+    };
+    tx.onerror = () => {
+      db.close();
+      resolve(false);
+    };
+  });
+}
+
+async function readCachedPageImage(pageIndex) {
+  if (!state.outputSession?.sessionId) return null;
+  const db = await openImageCache();
+  if (!db) return null;
+
+  return new Promise((resolve) => {
+    const tx = db.transaction(imageCacheConfig.storeName, "readonly");
+    const request = tx
+      .objectStore(imageCacheConfig.storeName)
+      .get(imageCacheKey(state.outputSession.sessionId, pageIndex));
+    request.onsuccess = () => resolve(request.result?.imageUrl || null);
+    request.onerror = () => resolve(null);
+    tx.oncomplete = () => db.close();
+    tx.onerror = () => db.close();
+  });
+}
+
 const image2Provider = {
   name: "image2-gpt-image-2",
   async generate({ pages, style, mode, startIndex = 0, onProgress = () => {}, onGenerated = async () => {} }) {
@@ -223,24 +289,25 @@ function restoreDraft() {
   }
 }
 
-async function ensureOutputSession() {
-  if (!state.copy) return null;
-  if (state.outputSession?.sessionId) return state.outputSession;
+async function createOrUpdateOutputSession(sessionId) {
+  const previousSavedPages = state.savedPages || {};
+  const body = {
+    title: state.copy.title,
+    copy: {
+      ...state.copy,
+      copyProvider: copyProvider.name,
+      imageProvider: image2Provider.name,
+    },
+    pages: state.pages,
+    style: els.style.value,
+    publishText: publishText(),
+  };
+  if (sessionId) body.sessionId = sessionId;
 
   const response = await fetch("/api/output/session", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: state.copy.title,
-      copy: {
-        ...state.copy,
-        copyProvider: copyProvider.name,
-        imageProvider: image2Provider.name,
-      },
-      pages: state.pages,
-      style: els.style.value,
-      publishText: publishText(),
-    }),
+    body: JSON.stringify(body),
   });
   const payload = await response.json();
   if (!response.ok) throw new Error(payload.error || "输出文件夹创建失败");
@@ -248,10 +315,17 @@ async function ensureOutputSession() {
     sessionId: payload.sessionId,
     folderPath: payload.folderPath,
   };
-  state.savedPages = payload.manifest?.savedPages || state.savedPages || {};
+  const serverSavedPages = payload.manifest?.savedPages || {};
+  state.savedPages = Object.keys(serverSavedPages).length ? serverSavedPages : previousSavedPages;
   persistDraft();
   renderPublishBox();
   return state.outputSession;
+}
+
+async function ensureOutputSession() {
+  if (!state.copy) return null;
+  if (state.outputSession?.sessionId) return state.outputSession;
+  return createOrUpdateOutputSession();
 }
 
 async function refreshOutputSession() {
@@ -267,6 +341,7 @@ async function refreshOutputSession() {
 
 async function savePageImage(item, pageIndex) {
   await ensureOutputSession();
+  await cachePageImage(pageIndex, item.imageUrl);
   const response = await fetch("/api/output/page", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -311,6 +386,67 @@ function buildSavedPreviewItems() {
       };
     })
     .filter(Boolean);
+}
+
+async function hydrateCachedImages() {
+  if (!state.pages.length || !state.outputSession?.sessionId) return;
+
+  const items = [];
+  let restoredCount = 0;
+  for (let index = 0; index < state.pages.length; index += 1) {
+    const pageIndex = index + 1;
+    const page = state.pages[index];
+    const cachedImage = await readCachedPageImage(pageIndex);
+    const saved = savedPageFor(pageIndex);
+    const imageUrl = cachedImage || (saved?.webPath ? withCacheBuster(saved.webPath) : null);
+    if (!imageUrl) continue;
+
+    if (cachedImage) restoredCount += 1;
+    items.push({
+      id: `full-${pageIndex}`,
+      pageIndex,
+      mode: "full",
+      style: els.style.value,
+      page,
+      imageUrl,
+      html: renderImageArtwork(page, imageUrl),
+      savedFile: saved,
+    });
+  }
+
+  if (!items.length) return;
+  state.images = items;
+  state.previewItems = items;
+  state.selectedIndex = Math.min(state.selectedIndex, items.length - 1);
+  renderPreview();
+  renderPublishBox();
+  if (restoredCount) toast("已恢复上次生成的图片。");
+}
+
+async function syncCachedImagesToServer() {
+  if (!state.copy || !state.outputSession?.sessionId || !state.pages.length) return 0;
+
+  const cachedPages = [];
+  for (let index = 0; index < state.pages.length; index += 1) {
+    const pageIndex = index + 1;
+    const imageUrl = await readCachedPageImage(pageIndex);
+    if (imageUrl) cachedPages.push({ pageIndex, page: state.pages[index], imageUrl });
+  }
+
+  if (!cachedPages.length) return 0;
+
+  await createOrUpdateOutputSession(state.outputSession.sessionId);
+  for (const item of cachedPages) {
+    await savePageImage(
+      {
+        page: item.page,
+        imageUrl: item.imageUrl,
+        prompt: savedPageFor(item.pageIndex)?.prompt || "",
+      },
+      item.pageIndex
+    );
+  }
+  return cachedPages.length;
 }
 
 function savedCount() {
@@ -485,7 +621,11 @@ async function generateStyleSamples() {
 async function generateFullNote() {
   if (!(await ensureScript())) return;
   await ensureOutputSession();
-  await refreshOutputSession();
+  const serverManifest = await refreshOutputSession();
+  if (!serverManifest && savedCount()) {
+    const restoredCount = await syncCachedImagesToServer();
+    if (!restoredCount) state.savedPages = {};
+  }
   const missingPages = state.pages
     .map((page, index) => ({ page, pageIndex: index + 1 }))
     .filter(({ pageIndex }) => !savedPageFor(pageIndex));
@@ -715,7 +855,7 @@ function renderPublishBox() {
   els.publishBox.textContent = `${publishText()}
 
 ## ${state.appMode === "web" ? "下载" : "本地输出"}
-${state.appMode === "web" ? "生成完整图片后，点左下角“导出图片”，会下载 PNG 和文案压缩包。" : "图片会一张张保存到本地文件夹。点左下角“打开文件夹”可以直接查看。"}
+${state.appMode === "web" ? "生成完整图片后，点左下角“导出图片”，会下载 PNG 和文案压缩包。刷新页面会尽量从当前浏览器恢复图片；长期留存请及时下载。" : "图片会一张张保存到本地文件夹。点左下角“打开文件夹”可以直接查看。"}
 `;
 }
 
@@ -753,6 +893,21 @@ async function exportPackage() {
 
   setBusy(els.exportPackage, "准备下载...");
   try {
+    let serverManifest = await refreshOutputSession();
+    const restoredCount = await syncCachedImagesToServer();
+    if (restoredCount) {
+      serverManifest = await refreshOutputSession();
+      state.images = buildSavedPreviewItems();
+      state.previewItems = state.images;
+      renderPreview();
+    }
+
+    if (!serverManifest || !Object.keys(serverManifest.savedPages || {}).length) {
+      renderPublishError("网页服务器已经重启，之前的图片文件不在服务器上了。请点“继续生成剩余图片”重新补图。");
+      toast("旧图片已失效，请点主按钮继续补图。");
+      return;
+    }
+
     const sessionId = encodeURIComponent(state.outputSession.sessionId);
     window.location.href = `/api/output/download?sessionId=${sessionId}`;
     toast("已开始下载，请查看浏览器下载列表。");
@@ -955,4 +1110,4 @@ updatePrimaryButton();
 updateGuide();
 renderPanels();
 setStep(state.view);
-checkProvider();
+checkProvider().finally(() => hydrateCachedImages());
