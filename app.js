@@ -3,6 +3,11 @@ import { buildImagePrompt, buildVisualContract, getSampleStyleOptions } from "./
 const $ = (selector) => document.querySelector(selector);
 
 const els = {
+  appShell: $("#appShell"),
+  accessGate: $("#accessGate"),
+  accessForm: $("#accessForm"),
+  accessPassword: $("#accessPassword"),
+  accessError: $("#accessError"),
   topic: $("#topic"),
   material: $("#material"),
   persona: $("#persona"),
@@ -40,6 +45,8 @@ const state = {
   selectedStyle: "",
   outputSession: null,
   savedPages: {},
+  accessRequired: false,
+  accessAuthorized: true,
 };
 
 const imageCacheConfig = {
@@ -152,7 +159,7 @@ const image2Provider = {
           response_format: "b64_json",
         }),
       });
-      const payload = await response.json();
+      const { payload } = await readAPIResponse(response);
       if (!response.ok) {
         throw new Error(payload.error || "Image2 生成失败");
       }
@@ -187,7 +194,7 @@ const copyProvider = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ topic, material, persona, style }),
     });
-    const payload = await response.json();
+    const { payload } = await readAPIResponse(response);
     if (!response.ok) {
       throw new Error(payload.error || "DeepSeek 文案生成失败");
     }
@@ -197,6 +204,73 @@ const copyProvider = {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function showAccessGate(message = "") {
+  state.accessRequired = true;
+  state.accessAuthorized = false;
+  if (els.appShell) els.appShell.classList.add("access-locked");
+  if (els.accessError) els.accessError.textContent = message;
+  if (els.accessGate) {
+    els.accessGate.hidden = false;
+    window.setTimeout(() => els.accessPassword?.focus(), 50);
+  }
+}
+
+function hideAccessGate() {
+  state.accessAuthorized = true;
+  if (els.appShell) els.appShell.classList.remove("access-locked");
+  if (els.accessGate) els.accessGate.hidden = true;
+  if (els.accessError) els.accessError.textContent = "";
+}
+
+async function readAPIResponse(response, options = {}) {
+  const payload = await response.json().catch(() => ({}));
+  if (response.status === 401 && payload.accessRequired && options.showGate !== false) {
+    showAccessGate("访问状态已过期，请重新输入密码。");
+  }
+  return { response, payload };
+}
+
+async function checkAccessGate() {
+  const response = await fetch("/api/access/status");
+  const { payload } = await readAPIResponse(response, { showGate: false });
+  state.accessRequired = Boolean(payload.required);
+  state.accessAuthorized = !payload.required || Boolean(payload.authorized);
+  if (state.accessRequired && !state.accessAuthorized) {
+    showAccessGate();
+    return false;
+  }
+  hideAccessGate();
+  return true;
+}
+
+async function handleAccessLogin(event) {
+  event.preventDefault();
+  const password = els.accessPassword?.value || "";
+  if (!password.trim()) {
+    if (els.accessError) els.accessError.textContent = "先输入访问密码。";
+    return;
+  }
+
+  const button = els.accessForm?.querySelector("button");
+  if (button) setBusy(button, "验证中...");
+  try {
+    const response = await fetch("/api/access/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ password }),
+    });
+    const { payload } = await readAPIResponse(response, { showGate: false });
+    if (!response.ok) throw new Error(payload.error || "访问密码不正确。");
+    if (els.accessPassword) els.accessPassword.value = "";
+    hideAccessGate();
+    initApp();
+  } catch (error) {
+    showAccessGate(error.message || "访问密码不正确。");
+  } finally {
+    if (button) restoreButton(button, "进入生产台");
+  }
 }
 
 function escapeHTML(value) {
@@ -341,7 +415,7 @@ async function createOrUpdateOutputSession(sessionId) {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
-  const payload = await response.json();
+  const { payload } = await readAPIResponse(response);
   if (!response.ok) throw new Error(payload.error || "输出文件夹创建失败");
   state.outputSession = {
     sessionId: payload.sessionId,
@@ -363,7 +437,7 @@ async function ensureOutputSession() {
 async function refreshOutputSession() {
   if (!state.outputSession?.sessionId) return null;
   const response = await fetch(`/api/output/session?sessionId=${encodeURIComponent(state.outputSession.sessionId)}`);
-  const payload = await response.json();
+  const { payload } = await readAPIResponse(response);
   if (!response.ok) return null;
   state.outputSession.folderPath = payload.folderPath;
   state.savedPages = payload.manifest?.savedPages || {};
@@ -387,7 +461,7 @@ async function savePageImage(item, pageIndex) {
       style: item.style || selectedVisualStyle(),
     }),
   });
-  const payload = await response.json();
+  const { payload } = await readAPIResponse(response);
   if (!response.ok) throw new Error(payload.error || "图片保存失败");
 
   state.savedPages = payload.manifest?.savedPages || {
@@ -941,7 +1015,7 @@ async function exportPackage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ sessionId: state.outputSession.sessionId }),
       });
-      const payload = await response.json();
+      const { payload } = await readAPIResponse(response);
       if (!response.ok) throw new Error(payload.error || "打开文件夹失败");
       toast("已打开输出文件夹。");
     } catch (error) {
@@ -1084,9 +1158,9 @@ function providerLabel() {
 
 async function checkProvider() {
   const [copyResult, imageResult, appResult] = await Promise.allSettled([
-    fetch("/api/copy/status").then((response) => response.json().then((payload) => ({ response, payload }))),
-    fetch("/api/image2/models").then((response) => response.json().then((payload) => ({ response, payload }))),
-    fetch("/api/app/status").then((response) => response.json().then((payload) => ({ response, payload }))),
+    fetch("/api/copy/status").then((response) => readAPIResponse(response)),
+    fetch("/api/image2/models").then((response) => readAPIResponse(response)),
+    fetch("/api/app/status").then((response) => readAPIResponse(response)),
   ]);
 
   if (appResult.status === "fulfilled" && appResult.value.response.ok) {
@@ -1166,21 +1240,45 @@ function toast(message) {
   window.setTimeout(() => node.remove(), 2200);
 }
 
-els.primaryFlow.addEventListener("click", runPrimaryFlow);
-els.exportPackage.addEventListener("click", exportPackage);
-els.style.addEventListener("change", () => {
-  setSelectedStyle(els.style.value);
-  persistDraft();
-  updateGuide();
-});
-els.steps.querySelectorAll(".step").forEach((step) => {
-  step.addEventListener("click", () => showStep(step.dataset.step));
-});
+let eventsBound = false;
+let appInitialized = false;
 
-setSelectedStyle(els.style.value);
-restoreDraft();
-updatePrimaryButton();
-updateGuide();
-renderPanels();
-setStep(state.view);
-checkProvider().finally(() => hydrateCachedImages());
+function bindEvents() {
+  if (eventsBound) return;
+  eventsBound = true;
+  els.accessForm?.addEventListener("submit", handleAccessLogin);
+  els.primaryFlow.addEventListener("click", runPrimaryFlow);
+  els.exportPackage.addEventListener("click", exportPackage);
+  els.style.addEventListener("change", () => {
+    setSelectedStyle(els.style.value);
+    persistDraft();
+    updateGuide();
+  });
+  els.steps.querySelectorAll(".step").forEach((step) => {
+    step.addEventListener("click", () => showStep(step.dataset.step));
+  });
+}
+
+function initApp() {
+  if (appInitialized) return;
+  appInitialized = true;
+  setSelectedStyle(els.style.value);
+  restoreDraft();
+  updatePrimaryButton();
+  updateGuide();
+  renderPanels();
+  setStep(state.view);
+  checkProvider().finally(() => hydrateCachedImages());
+}
+
+async function startApp() {
+  bindEvents();
+  try {
+    const canEnter = await checkAccessGate();
+    if (canEnter) initApp();
+  } catch {
+    showAccessGate("暂时无法确认访问状态，请刷新后再试。");
+  }
+}
+
+startApp();
