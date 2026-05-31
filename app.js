@@ -1,4 +1,4 @@
-import { buildImagePrompt, getSampleStyleOptions } from "./xhs-rules.mjs";
+import { buildImagePrompt, buildVisualContract, getSampleStyleOptions } from "./xhs-rules.mjs";
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -118,6 +118,7 @@ const image2Provider = {
     startIndex = 0,
     progressTotal,
     promptTotalPages,
+    visualContract,
     onProgress = () => {},
     onGenerated = async () => {},
   }) {
@@ -130,6 +131,7 @@ const image2Provider = {
         pageIndex,
         totalPages: promptTotalPages || progressTotal || startIndex + pages.length,
         pagePlan,
+        visualContract,
       });
       onProgress({
         current: pageIndex,
@@ -496,7 +498,7 @@ function outputActionLabel() {
 function nextExportActionLabel() {
   if (state.phase === "idle") return "开始生成方案";
   if (state.phase === "script") return "下一步：生成 3 套样图";
-  if (state.phase === "style") return `确认，生成完整 ${state.pages.length || "若干"} 张`;
+  if (state.phase === "style") return `确认，按方案生成 ${state.pages.length || "若干"} 张`;
   return "继续生成剩余图片";
 }
 
@@ -622,11 +624,13 @@ async function generateStyleSamples() {
     state.samples = [];
     let generatedCount = 0;
     for (const option of styleOptions) {
+      const visualContract = buildVisualContract(option.name, samplePages);
       const items = await image2Provider.generate({
         pages: samplePages,
         style: option.name,
         mode: "sample",
         pagePlan: samplePages,
+        visualContract,
         startIndex: generatedCount,
         progressTotal: totalSamples,
         promptTotalPages: samplePages.length,
@@ -701,12 +705,14 @@ async function generateFullNote() {
   setBusy(els.primaryFlow, `继续生成... ${savedCount()}/${state.pages.length}`);
   try {
     const finalStyle = selectedVisualStyle();
+    const visualContract = buildVisualContract(finalStyle, state.pages);
     for (const { page, pageIndex } of missingPages) {
       await image2Provider.generate({
         pages: [page],
         style: finalStyle,
         mode: "full",
         pagePlan: state.pages,
+        visualContract,
         startIndex: pageIndex - 1,
         progressTotal: state.pages.length,
         promptTotalPages: state.pages.length,
@@ -760,15 +766,48 @@ function renderSamplesEmpty() {
 }
 
 function renderSampleGrid() {
-  els.sampleGrid.innerHTML = state.samples
-    .map(
-      (item, index) => `
-        <button class="sample-card ${item.style === selectedVisualStyle() ? "active" : ""}" data-index="${index}" aria-label="查看样图 ${index + 1}">
-          <span class="sample-label">${escapeHTML(item.sampleStyle?.label || item.style)} · ${escapeHTML(item.samplePageRole || "")}</span>
-          ${item.html}
-        </button>
-      `
-    )
+  const groups = [];
+  for (const item of state.samples) {
+    let group = groups.find((candidate) => candidate.style === item.style);
+    if (!group) {
+      group = {
+        style: item.style,
+        label: item.sampleStyle?.label || item.style,
+        items: [],
+      };
+      groups.push(group);
+    }
+    group.items.push(item);
+  }
+
+  els.sampleGrid.innerHTML = groups
+    .map((group) => {
+      const active = group.style === selectedVisualStyle();
+      return `
+        <article class="sample-set ${active ? "active" : ""}" data-style="${escapeHTML(group.style)}">
+          <div class="sample-set-head">
+            <div>
+              <strong>${escapeHTML(group.label)}</strong>
+              <span>封面 + 正文样图，点击任意一张选择这套</span>
+            </div>
+            <em>${active ? "已选" : "可选"}</em>
+          </div>
+          <div class="sample-pair">
+            ${group.items
+              .map((item) => {
+                const index = state.samples.indexOf(item);
+                return `
+                  <button class="sample-card ${active ? "active" : ""}" data-index="${index}" aria-label="选择${escapeHTML(group.label)}${escapeHTML(item.samplePageRole || "")}样图">
+                    <span class="sample-label">${escapeHTML(item.samplePageRole || "")}</span>
+                    ${item.html}
+                  </button>
+                `;
+              })
+              .join("")}
+          </div>
+        </article>
+      `;
+    })
     .join("");
 
   els.sampleGrid.querySelectorAll(".sample-card").forEach((button) => {
