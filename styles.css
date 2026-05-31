@@ -569,12 +569,66 @@ select:focus {
 .sample-grid {
   display: grid;
   grid-template-columns: 1fr;
-  gap: 12px;
+  gap: 14px;
   margin-top: 16px;
 }
 
 .active-panel .sample-grid {
+  grid-template-columns: 1fr;
+}
+
+.sample-set {
+  padding: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.62);
+  border-radius: 22px;
+  background: var(--surface);
+  box-shadow: var(--shadow-soft);
+}
+
+.sample-set.active {
+  border-color: rgba(45, 45, 42, 0.48);
+  box-shadow:
+    0 0 0 2px rgba(255, 198, 55, 0.72),
+    var(--shadow-soft);
+}
+
+.sample-set-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.sample-set-head strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--text);
+  font-size: 15px;
+}
+
+.sample-set-head span {
+  display: block;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.sample-set-head em {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border-radius: 999px;
+  color: #6f4e00;
+  background: rgba(255, 198, 55, 0.32);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 800;
+}
+
+.sample-pair {
+  display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
 }
 
 .sample-card {
@@ -993,7 +1047,8 @@ select:focus {
   .steps,
   .brief-grid,
   .page-list,
-  .sample-grid {
+  .sample-grid,
+  .sample-pair {
     grid-template-columns: 1fr;
   }
 
