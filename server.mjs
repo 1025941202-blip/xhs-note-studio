@@ -15,7 +15,7 @@ const baseURL = process.env.BANANAROUTER_BASE_URL || "https://api.bananarouter.c
 const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
 const deepseekBaseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const deepseekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
-const image2TimeoutMs = Number(process.env.IMAGE2_TIMEOUT_MS || 240000);
+const image2TimeoutMs = Number(process.env.IMAGE2_TIMEOUT_MS || 90000);
 const outputRoot = join(root, "outputs");
 const appMode = process.env.APP_MODE === "web" ? "web" : "local";
 const host = process.env.HOST || (appMode === "web" ? "0.0.0.0" : "127.0.0.1");
@@ -269,7 +269,11 @@ async function handleGenerate(req, res) {
       sendJSON(res, 504, { error: "Image2 请求超时，请稍后重试。" });
       return;
     }
-    throw error;
+    sendJSON(res, 502, {
+      error: "Image2 上游连接失败，请稍后重试。",
+      details: error.message || "upstream fetch failed",
+    });
+    return;
   } finally {
     clearTimeout(timeout);
   }
