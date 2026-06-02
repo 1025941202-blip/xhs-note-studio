@@ -145,20 +145,25 @@ const image2Provider = {
         total: progressTotal || startIndex + pages.length,
         title: page.title,
       });
-      const response = await fetch("/api/image2/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "gpt-image-2",
-          prompt,
-          n: 1,
-          size: "1024x1536",
-          quality: "low",
-          output_format: "png",
-          moderation: "auto",
-          response_format: "b64_json",
-        }),
-      });
+      let response;
+      try {
+        response = await fetch("/api/image2/generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            model: "gpt-image-2",
+            prompt,
+            n: 1,
+            size: "1024x1536",
+            quality: "low",
+            output_format: "png",
+            moderation: "auto",
+            response_format: "b64_json",
+          }),
+        });
+      } catch {
+        throw new Error("图片生成连接中断，通常是生成耗时太久或网络临时断开。请点主按钮重试；如果已经生成过部分图片，系统会继续补剩下的。");
+      }
       const { payload } = await readAPIResponse(response);
       if (!response.ok) {
         throw new Error(payload.error || "Image2 生成失败");
