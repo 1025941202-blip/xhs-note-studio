@@ -101,6 +101,7 @@ export function buildImagePrompt(page, style, context = {}) {
   const points = Array.isArray(page.points) ? page.points.filter(Boolean) : [];
   const pagePlan = Array.isArray(context.pagePlan) ? formatPagePlan(context.pagePlan) : "";
   const visualContract = context.visualContract || buildVisualContract(style, context.pagePlan || []);
+  const styleNote = String(context.styleNote || "").trim();
 
   return [
     "生成一张小红书竖版图文页面，比例 3:4，适合手机阅读。",
@@ -114,6 +115,7 @@ export function buildImagePrompt(page, style, context = {}) {
     `副标题：${page.subtitle || ""}`,
     `页面备注：${page.note || ""}`,
     `画面意图：${page.visualIntent || ""}`,
+    styleNote ? `用户额外风格修改：${styleNote}` : "",
     `页面要点：${points.join("；")}`,
     "套图一致性强约束：所有页面必须像同一个账号栏目，用同一套背景颜色、标题层级、信息卡形状、图标线条、装饰元素、页码位置和留白节奏。",
     "系列母版：固定同一套页面骨架：顶部栏目/页码区，中部主信息卡，底部要点区；只替换内容和局部强调，不重新设计页面。",

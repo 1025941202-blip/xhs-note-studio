@@ -637,6 +637,59 @@ select:focus {
   line-height: 1.6;
 }
 
+.editable-page {
+  display: grid;
+  gap: 10px;
+}
+
+.editable-page label,
+.style-note-field {
+  display: grid;
+  gap: 6px;
+}
+
+.editable-page label em,
+.style-note-field span {
+  color: var(--muted);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 760;
+}
+
+.editable-page input {
+  min-height: 38px;
+  border-radius: 14px;
+}
+
+.editable-page textarea {
+  min-height: 64px;
+  border-radius: 14px;
+}
+
+.prompt-preview {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.34);
+  box-shadow: var(--shadow-inset);
+}
+
+.prompt-preview summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.prompt-preview pre {
+  max-height: 220px;
+  margin: 10px 0 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  color: #4a4f4e;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
 .sample-grid {
   display: grid;
   grid-template-columns: 1fr;
@@ -741,6 +794,10 @@ select:focus {
 
 .sample-card .note-artwork {
   min-height: 100%;
+}
+
+.style-note-field {
+  margin-top: 14px;
 }
 
 .empty-state {

@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, randomUUID, timingSafeEqual } from "node:crypto";
 import { execFile } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { extname, join, normalize, relative } from "node:path";
@@ -16,6 +16,8 @@ const deepseekApiKey = process.env.DEEPSEEK_API_KEY;
 const deepseekBaseURL = process.env.DEEPSEEK_BASE_URL || "https://api.deepseek.com";
 const deepseekModel = process.env.DEEPSEEK_MODEL || "deepseek-v4-flash";
 const image2TimeoutMs = Number(process.env.IMAGE2_TIMEOUT_MS || 90000);
+const image2JobTimeoutMs = Number(process.env.IMAGE2_JOB_TIMEOUT_MS || 240000);
+const imageJobMaxAgeMs = Number(process.env.IMAGE_JOB_MAX_AGE_MS || 1000 * 60 * 30);
 const outputRoot = join(root, "outputs");
 const appMode = process.env.APP_MODE === "web" ? "web" : "local";
 const host = process.env.HOST || (appMode === "web" ? "0.0.0.0" : "127.0.0.1");
@@ -23,6 +25,7 @@ const accessPassword = String(process.env.ACCESS_PASSWORD || "").trim();
 const accessSecret = String(process.env.ACCESS_SECRET || accessPassword || "xhs-note-studio-local").trim();
 const accessCookieName = "xhs_access";
 const accessMaxAgeSeconds = 60 * 60 * 24 * 30;
+const imageJobs = new Map();
 
 const contentTypes = {
   ".html": "text/html;charset=utf-8",
@@ -229,21 +232,29 @@ async function handleAppStatus(_req, res) {
   });
 }
 
-async function handleGenerate(req, res) {
-  if (!apiKey) {
-    sendJSON(res, 500, { error: "BANANAROUTER_API_KEY is not configured." });
-    return;
-  }
+function image2RequestBody(body, prompt) {
+  return {
+    model: body.model || "gpt-image-2",
+    prompt,
+    n: Number(body.n || 1),
+    size: body.size || "1024x1536",
+    quality: body.quality || "auto",
+    output_format: body.output_format || "png",
+    moderation: body.moderation || "auto",
+    response_format: body.response_format || "b64_json",
+  };
+}
 
-  const body = await readJSON(req);
+async function requestImage2(body, timeoutMs = image2TimeoutMs) {
   const prompt = String(body.prompt || "").trim();
   if (!prompt) {
-    sendJSON(res, 400, { error: "prompt is required." });
-    return;
+    const error = new Error("prompt is required.");
+    error.status = 400;
+    throw error;
   }
 
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), image2TimeoutMs);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let upstream;
   try {
     upstream = await fetch(`${baseURL}/v1/images/generations`, {
@@ -253,41 +264,124 @@ async function handleGenerate(req, res) {
         Authorization: `Bearer ${apiKey}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        model: body.model || "gpt-image-2",
-        prompt,
-        n: Number(body.n || 1),
-        size: body.size || "1024x1536",
-        quality: body.quality || "auto",
-        output_format: body.output_format || "png",
-        moderation: body.moderation || "auto",
-        response_format: body.response_format || "b64_json",
-      }),
+      body: JSON.stringify(image2RequestBody(body, prompt)),
     });
   } catch (error) {
     if (error.name === "AbortError") {
-      sendJSON(res, 504, { error: "Image2 请求超时，请稍后重试。" });
-      return;
+      const timeoutError = new Error("Image2 请求超时，请稍后重试。");
+      timeoutError.status = 504;
+      throw timeoutError;
     }
-    sendJSON(res, 502, {
-      error: "Image2 上游连接失败，请稍后重试。",
-      details: error.message || "upstream fetch failed",
-    });
-    return;
+    const upstreamError = new Error("Image2 上游连接失败，请稍后重试。");
+    upstreamError.status = 502;
+    upstreamError.details = error.message || "upstream fetch failed";
+    throw upstreamError;
   } finally {
     clearTimeout(timeout);
   }
 
   const payload = await upstream.json().catch(() => ({}));
   if (!upstream.ok) {
-    sendJSON(res, upstream.status, {
-      error: payload.error?.message || payload.error || "Image generation failed.",
-      details: payload,
-    });
+    const error = new Error(payload.error?.message || payload.error || "Image generation failed.");
+    error.status = upstream.status;
+    error.details = payload;
+    throw error;
+  }
+
+  return payload;
+}
+
+function sendImage2Error(res, error) {
+  sendJSON(res, error.status || 500, {
+    error: error.message || "Image generation failed.",
+    details: error.details,
+  });
+}
+
+async function handleGenerate(req, res) {
+  if (!apiKey) {
+    sendJSON(res, 500, { error: "BANANAROUTER_API_KEY is not configured." });
     return;
   }
 
-  sendJSON(res, 200, payload);
+  try {
+    const body = await readJSON(req);
+    const payload = await requestImage2(body, image2TimeoutMs);
+    sendJSON(res, 200, payload);
+  } catch (error) {
+    sendImage2Error(res, error);
+  }
+}
+
+function cleanupImageJobs() {
+  const now = Date.now();
+  for (const [jobId, job] of imageJobs) {
+    if (now - job.createdAt > imageJobMaxAgeMs) imageJobs.delete(jobId);
+  }
+}
+
+function imageJobPayload(job) {
+  return {
+    jobId: job.jobId,
+    status: job.status,
+    createdAt: new Date(job.createdAt).toISOString(),
+    updatedAt: new Date(job.updatedAt).toISOString(),
+    payload: job.status === "done" ? job.payload : undefined,
+    error: job.status === "error" ? job.error : undefined,
+    details: job.status === "error" ? job.details : undefined,
+  };
+}
+
+async function handleImageJobCreate(req, res) {
+  if (!apiKey) {
+    sendJSON(res, 500, { error: "BANANAROUTER_API_KEY is not configured." });
+    return;
+  }
+
+  const body = await readJSON(req);
+  if (!String(body.prompt || "").trim()) {
+    sendJSON(res, 400, { error: "prompt is required." });
+    return;
+  }
+
+  cleanupImageJobs();
+  const now = Date.now();
+  const job = {
+    jobId: randomUUID(),
+    status: "running",
+    createdAt: now,
+    updatedAt: now,
+    payload: null,
+    error: "",
+    details: null,
+  };
+  imageJobs.set(job.jobId, job);
+
+  requestImage2(body, image2JobTimeoutMs)
+    .then((payload) => {
+      job.status = "done";
+      job.payload = payload;
+      job.updatedAt = Date.now();
+    })
+    .catch((error) => {
+      job.status = "error";
+      job.error = error.message || "Image generation failed.";
+      job.details = error.details;
+      job.updatedAt = Date.now();
+    });
+
+  sendJSON(res, 202, imageJobPayload(job));
+}
+
+async function handleImageJobStatus(_req, res, url) {
+  cleanupImageJobs();
+  const jobId = url.pathname.split("/").pop();
+  const job = imageJobs.get(jobId);
+  if (!job) {
+    sendJSON(res, 404, { error: "图片生成任务已经过期，请重新生成。" });
+    return;
+  }
+  sendJSON(res, 200, imageJobPayload(job));
 }
 
 function imageDataToFile(imageUrl) {
@@ -804,6 +898,14 @@ const server = createServer(async (req, res) => {
     }
     if (req.method === "GET" && url.pathname === "/api/image2/models") {
       await handleModels(req, res);
+      return;
+    }
+    if (req.method === "POST" && url.pathname === "/api/image2/jobs") {
+      await handleImageJobCreate(req, res);
+      return;
+    }
+    if (req.method === "GET" && url.pathname.startsWith("/api/image2/jobs/")) {
+      await handleImageJobStatus(req, res, url);
       return;
     }
     if (req.method === "POST" && url.pathname === "/api/image2/generate") {

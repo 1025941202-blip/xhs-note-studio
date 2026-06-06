@@ -18,6 +18,7 @@ const els = {
   pageList: $("#pageList"),
   pageCount: $("#pageCount"),
   sampleGrid: $("#sampleGrid"),
+  styleNote: $("#styleNote"),
   preview: $("#carouselPreview"),
   previewStatus: $("#previewStatus"),
   thumbStrip: $("#thumbStrip"),
@@ -43,6 +44,8 @@ const state = {
   previewItems: [],
   selectedIndex: 0,
   selectedStyle: "",
+  styleNote: "",
+  imageJobs: {},
   outputSession: null,
   savedPages: {},
   accessRequired: false,
@@ -139,35 +142,23 @@ const image2Provider = {
         totalPages: promptTotalPages || progressTotal || startIndex + pages.length,
         pagePlan,
         visualContract,
+        styleNote: state.styleNote,
       });
       onProgress({
         current: pageIndex,
         total: progressTotal || startIndex + pages.length,
         title: page.title,
       });
-      let response;
-      try {
-        response = await fetch("/api/image2/generate", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: "gpt-image-2",
-            prompt,
-            n: 1,
-            size: "1024x1536",
-            quality: "low",
-            output_format: "png",
-            moderation: "auto",
-            response_format: "b64_json",
-          }),
-        });
-      } catch {
-        throw new Error("图片生成连接中断，通常是生成耗时太久或网络临时断开。请点主按钮重试；如果已经生成过部分图片，系统会继续补剩下的。");
-      }
-      const { payload } = await readAPIResponse(response);
-      if (!response.ok) {
-        throw new Error(payload.error || "Image2 生成失败");
-      }
+      const payload = await requestImageGeneration({
+        model: "gpt-image-2",
+        prompt,
+        n: 1,
+        size: "1024x1536",
+        quality: "low",
+        output_format: "png",
+        moderation: "auto",
+        response_format: "b64_json",
+      }, imageJobKey({ mode, style, pageIndex, prompt }));
 
       const b64 = payload.data?.[0]?.b64_json;
       const imageUrl = b64 ? `data:image/png;base64,${b64}` : payload.data?.[0]?.url;
@@ -206,6 +197,104 @@ const copyProvider = {
     return payload;
   },
 };
+
+function imageJobKey({ mode, style, pageIndex, prompt }) {
+  return `${mode}:${style}:${pageIndex}:${hashText(prompt)}`;
+}
+
+function hashText(value) {
+  let hash = 0;
+  const text = String(value || "");
+  for (let index = 0; index < text.length; index += 1) {
+    hash = (hash * 31 + text.charCodeAt(index)) >>> 0;
+  }
+  return hash.toString(36);
+}
+
+async function requestImageGeneration(body, jobKey = "") {
+  const existingJobId = jobKey ? state.imageJobs[jobKey] : "";
+  if (existingJobId) {
+    try {
+      const result = await pollImageJob(existingJobId);
+      delete state.imageJobs[jobKey];
+      persistDraft();
+      return result;
+    } catch (error) {
+      if (error.code !== "JOB_MISSING" && error.code !== "JOB_ERROR") throw error;
+      delete state.imageJobs[jobKey];
+      persistDraft();
+    }
+  }
+
+  let response;
+  try {
+    response = await fetch("/api/image2/jobs", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new Error("图片生成任务提交失败，通常是手机网络临时断开。请稍后再点主按钮重试。");
+  }
+
+  const { payload } = await readAPIResponse(response);
+  if (!response.ok) throw new Error(payload.error || "Image2 任务创建失败");
+  if (!payload.jobId) throw new Error("Image2 没有返回任务编号，请稍后重试。");
+  if (jobKey) {
+    state.imageJobs[jobKey] = payload.jobId;
+    persistDraft();
+  }
+
+  try {
+    const result = await pollImageJob(payload.jobId);
+    if (jobKey) {
+      delete state.imageJobs[jobKey];
+      persistDraft();
+    }
+    return result;
+  } catch (error) {
+    if (jobKey && (error.code === "JOB_MISSING" || error.code === "JOB_ERROR")) {
+      delete state.imageJobs[jobKey];
+      persistDraft();
+    }
+    throw error;
+  }
+}
+
+async function pollImageJob(jobId) {
+  const startedAt = Date.now();
+  let networkFailures = 0;
+
+  while (Date.now() - startedAt < 1000 * 60 * 5) {
+    await wait(2600);
+    let response;
+    try {
+      response = await fetch(`/api/image2/jobs/${encodeURIComponent(jobId)}`);
+      networkFailures = 0;
+    } catch {
+      networkFailures += 1;
+      if (networkFailures >= 5) {
+        throw new Error("手机网络连续中断，图片任务还没拿到结果。请保持页面打开后重试。");
+      }
+      continue;
+    }
+
+    const { payload } = await readAPIResponse(response);
+    if (!response.ok) {
+      const error = new Error(payload.error || "Image2 任务查询失败");
+      if (response.status === 404) error.code = "JOB_MISSING";
+      throw error;
+    }
+    if (payload.status === "done") return payload.payload;
+    if (payload.status === "error") {
+      const error = new Error(payload.error || "Image2 生成失败");
+      error.code = "JOB_ERROR";
+      throw error;
+    }
+  }
+
+  throw new Error("图片生成等待时间太长，请稍后点主按钮继续补生成。");
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -301,6 +390,10 @@ function setSelectedStyle(style) {
   if (matchingOption) els.style.value = state.selectedStyle;
 }
 
+function syncStyleNote() {
+  state.styleNote = els.styleNote?.value.trim() || "";
+}
+
 function savedPageFor(index) {
   return state.savedPages[String(index)] || state.savedPages[index];
 }
@@ -354,10 +447,12 @@ function persistDraft() {
     persona: els.persona.value,
     style: els.style.value,
     selectedStyle: selectedVisualStyle(),
+    styleNote: state.styleNote,
     phase: state.phase,
     maxStep: state.maxStep,
     copy: state.copy,
     pages: state.pages,
+    imageJobs: state.imageJobs,
     outputSession: state.outputSession,
     savedPages: state.savedPages,
   };
@@ -376,8 +471,11 @@ function restoreDraft() {
     els.persona.value = draft.persona || els.persona.value;
     els.style.value = draft.style || els.style.value;
     setSelectedStyle(draft.selectedStyle || draft.style || els.style.value);
+    state.styleNote = draft.styleNote || "";
+    if (els.styleNote) els.styleNote.value = state.styleNote;
     state.copy = draft.copy;
     state.pages = draft.pages;
+    state.imageJobs = draft.imageJobs || {};
     state.outputSession = draft.outputSession || null;
     state.savedPages = draft.savedPages || {};
     state.phase = draft.phase || "script";
@@ -678,58 +776,149 @@ function renderCopyError(message) {
 function renderPages() {
   els.pageList.innerHTML = state.pages
     .map(
-      (page, index) => `
-        <article class="page-item">
-          <span>${index + 1} / ${page.type === "cover" ? "封面" : page.type === "ending" ? "结尾页" : "正文页"} · ${
-        savedPageFor(index + 1) ? "已保存" : "待生成"
-      }</span>
-          <h3>${escapeHTML(page.title)}</h3>
-          <p>${escapeHTML(page.subtitle)}</p>
+      (page, index) => {
+        const pageNumber = index + 1;
+        const prompt = buildImagePrompt(page, selectedVisualStyle(), {
+          mode: "full",
+          pageIndex: pageNumber,
+          totalPages: state.pages.length,
+          pagePlan: state.pages,
+          visualContract: buildVisualContract(selectedVisualStyle(), state.pages),
+          styleNote: state.styleNote,
+        });
+        return `
+        <article class="page-item editable-page" data-page-index="${index}">
+          <span>${pageNumber} / ${pageTypeLabel(page)} · ${savedPageFor(pageNumber) ? "已保存" : "待生成"}</span>
+          <label>
+            <em>图上标题</em>
+            <input data-page-field="title" value="${escapeHTML(page.title)}" />
+          </label>
+          <label>
+            <em>副标题</em>
+            <input data-page-field="subtitle" value="${escapeHTML(page.subtitle)}" />
+          </label>
+          <label>
+            <em>这一页怎么画</em>
+            <textarea data-page-field="visualIntent" rows="2">${escapeHTML(page.visualIntent || "")}</textarea>
+          </label>
+          <label>
+            <em>页面要点</em>
+            <textarea data-page-field="points" rows="3">${escapeHTML((page.points || []).join("\n"))}</textarea>
+          </label>
+          <details class="prompt-preview">
+            <summary>查看这一张会发给 Image2 的提示词</summary>
+            <pre>${escapeHTML(prompt)}</pre>
+          </details>
         </article>
-      `
+      `;
+      }
     )
     .join("");
 }
 
+function pageTypeLabel(page) {
+  if (page.type === "cover") return "封面";
+  if (page.type === "ending") return "结尾页";
+  return "正文页";
+}
+
+function handlePageEdit(event) {
+  const field = event.target?.dataset?.pageField;
+  if (!field) return;
+  const card = event.target.closest("[data-page-index]");
+  const pageIndex = Number(card?.dataset.pageIndex);
+  const page = state.pages[pageIndex];
+  if (!page) return;
+
+  if (field === "points") {
+    page.points = event.target.value
+      .split(/\r?\n/)
+      .map((point) => point.trim())
+      .filter(Boolean)
+      .slice(0, 6);
+  } else {
+    page[field] = event.target.value;
+  }
+
+  invalidateGeneratedImages();
+  state.previewItems = state.pages.map((candidate, index) => ({
+    id: `script-${index + 1}`,
+    page: candidate,
+    html: renderArtwork(candidate, index),
+  }));
+  state.selectedIndex = Math.min(state.selectedIndex, state.previewItems.length - 1);
+  renderPreview();
+  renderPublishBox();
+  persistDraft();
+}
+
+function invalidateGeneratedImages() {
+  state.samples = [];
+  state.images = [];
+  state.savedPages = {};
+  state.outputSession = null;
+  state.imageJobs = {};
+  if (state.phase !== "idle") state.phase = "script";
+  state.maxStep = "script";
+  state.view = "script";
+  renderSamplesEmpty();
+  setStep("script");
+  renderPanels();
+  updatePrimaryButton();
+  updateGuide();
+}
+
 async function generateStyleSamples() {
   if (!(await ensureScript())) return;
+  syncStyleNote();
   await ensureOutputSession();
   const styleOptions = getSampleStyleOptions(els.style.value);
   const bodyPage = state.pages.find((page) => page.type !== "cover") || state.pages[1] || state.pages[0];
   const samplePages = [state.pages[0], bodyPage].filter(Boolean);
   const totalSamples = styleOptions.length * samplePages.length;
+  const validStyleIds = new Set(styleOptions.map((option) => option.id));
+  state.samples = state.samples.filter((item) => item.sampleStyle?.id && validStyleIds.has(item.sampleStyle.id));
   setBusy(els.primaryFlow, "生成 3 套样图中...");
   try {
-    state.samples = [];
-    let generatedCount = 0;
-    for (const option of styleOptions) {
-      const visualContract = buildVisualContract(option.name, samplePages);
-      const items = await image2Provider.generate({
-        pages: samplePages,
-        style: option.name,
-        mode: "sample",
-        pagePlan: samplePages,
-        visualContract,
-        startIndex: generatedCount,
-        progressTotal: totalSamples,
-        promptTotalPages: samplePages.length,
-        onProgress: ({ current, total, title }) => {
-          els.primaryFlow.textContent = `生成样图... ${current}/${total}`;
-          els.publishBox.textContent = `正在生成「${option.label}」样图：${title}\n\n先看风格，不会占用最终套图页数。`;
-        },
-      });
-      state.samples.push(
-        ...items.map((item, index) => ({
-          ...item,
-          id: `sample-${option.id}-${index + 1}`,
-          sampleStyle: option,
-          samplePageRole: index === 0 ? "封面" : "正文",
-        }))
-      );
-      generatedCount += samplePages.length;
-      renderSampleGrid();
+    for (let optionIndex = 0; optionIndex < styleOptions.length; optionIndex += 1) {
+      const option = styleOptions[optionIndex];
+      for (let localIndex = 0; localIndex < samplePages.length; localIndex += 1) {
+        const sampleId = `sample-${option.id}-${localIndex + 1}`;
+        if (state.samples.some((item) => item.id === sampleId)) continue;
+
+        const globalIndex = optionIndex * samplePages.length + localIndex;
+        const visualContract = buildVisualContract(option.name, samplePages);
+        await image2Provider.generate({
+          pages: [samplePages[localIndex]],
+          style: option.name,
+          mode: "sample",
+          pagePlan: samplePages,
+          visualContract,
+          startIndex: globalIndex,
+          progressTotal: totalSamples,
+          promptTotalPages: samplePages.length,
+          onProgress: ({ current, total, title }) => {
+            els.primaryFlow.textContent = `生成样图... ${current}/${total}`;
+            els.publishBox.textContent = `正在生成「${option.label}」样图：${title}\n\n成功一张就会保留；中途断了，再点主按钮只补缺的样图。`;
+          },
+          onGenerated: async (item) => {
+            state.samples.push({
+              ...item,
+              id: sampleId,
+              sampleStyle: option,
+              samplePageRole: localIndex === 0 ? "封面" : "正文",
+            });
+            renderSampleGrid();
+            persistDraft();
+          },
+        });
+      }
     }
-    setSelectedStyle(styleOptions[0].name);
+    const firstCompleteStyle =
+      styleOptions.find((option) =>
+        samplePages.every((_, index) => state.samples.some((item) => item.id === `sample-${option.id}-${index + 1}`))
+      ) || styleOptions[0];
+    setSelectedStyle(firstCompleteStyle.name);
     state.previewItems = state.samples.filter((item) => item.style === selectedVisualStyle());
     state.selectedIndex = 0;
     renderPages();
@@ -742,6 +931,13 @@ async function generateStyleSamples() {
     toast("3 套样图已生成，点喜欢的样图就会作为最终风格。");
   } catch (error) {
     state.maxStep = "style";
+    if (state.samples.length) {
+      const firstSample = state.samples[0];
+      setSelectedStyle(firstSample.style);
+      state.previewItems = state.samples.filter((item) => item.style === selectedVisualStyle());
+      state.selectedIndex = 0;
+      renderPreview();
+    }
     renderSampleError(error.message || "Image2 样图生成失败");
     showStep("style");
     toast(error.message || "Image2 样图生成失败");
@@ -755,6 +951,7 @@ async function generateStyleSamples() {
 
 async function generateFullNote() {
   if (!(await ensureScript())) return;
+  syncStyleNote();
   await ensureOutputSession();
   const serverManifest = await refreshOutputSession();
   if (!serverManifest && savedCount()) {
@@ -906,13 +1103,19 @@ function renderSampleGrid() {
 }
 
 function renderSampleError(message) {
-  els.sampleGrid.innerHTML = `
+  const errorHTML = `
     <div class="error-state">
       <strong>图片还没生成成功</strong>
       <p>${escapeHTML(message)}</p>
-      <small>请确认 Image2 账户可用，然后点左下角主按钮重试。</small>
+      <small>已经出现的样图会先保留。点左下角主按钮会继续补缺的样图。</small>
     </div>
   `;
+  if (state.samples.length) {
+    renderSampleGrid();
+    els.sampleGrid.insertAdjacentHTML("beforeend", errorHTML);
+    return;
+  }
+  els.sampleGrid.innerHTML = errorHTML;
 }
 
 function renderPublishError(message) {
@@ -1129,22 +1332,22 @@ function updateGuide() {
       text:
         state.phase === "idle"
           ? "填完左边两项，点主按钮。DeepSeek 会先生成标题、正文、话题和每张图的大概内容。"
-          : `这里是标题、正文和 ${state.pages.length || "若干"} 张图的拆页方案。想改选题或素材，就改左边后重新生成。`,
+          : `这里是标题、正文和 ${state.pages.length || "若干"} 张图的拆页方案。每张图的标题、要点和画面提示都可以直接改。`,
     },
     style: {
       title: "第 2 步：先看 3 套样图",
       text:
         state.phase === "script"
-          ? "点主按钮生成 3 套风格样图。点喜欢的样图选定风格，再生成完整套图。"
-          : `当前选择：${selectedVisualStyle()}。满意后按方案生成 ${state.pages.length || "若干"} 张。`,
+          ? "点主按钮生成 3 套风格样图。中途断了也会保留已出的样图，下一次只补缺的。"
+          : `当前选择：${selectedVisualStyle()}。可以写一句风格微调，满意后按方案生成 ${state.pages.length || "若干"} 张。`,
     },
     publish: {
       title: "第 3 步：拿完整结果",
       text:
         state.phase === "publish"
           ? state.appMode === "web"
-            ? "右边可以切换查看完整图片。点左下角导出图片，会下载 PNG 和文案包。"
-            : "右边可以切换查看完整图片。图片会自动保存，点左下角打开输出文件夹。"
+            ? "右边可以切换查看完整图片。成功一张会保存一张，中途断了点主按钮继续补。"
+            : "右边可以切换查看完整图片。成功一张会保存一张，点左下角打开输出文件夹。"
           : "生成完整图片后，这里会出现输出说明。",
     },
   };
@@ -1254,10 +1457,17 @@ function bindEvents() {
   els.accessForm?.addEventListener("submit", handleAccessLogin);
   els.primaryFlow.addEventListener("click", runPrimaryFlow);
   els.exportPackage.addEventListener("click", exportPackage);
+  els.pageList.addEventListener("input", handlePageEdit);
   els.style.addEventListener("change", () => {
     setSelectedStyle(els.style.value);
+    renderPages();
     persistDraft();
     updateGuide();
+  });
+  els.styleNote?.addEventListener("input", () => {
+    syncStyleNote();
+    renderPages();
+    persistDraft();
   });
   els.steps.querySelectorAll(".step").forEach((step) => {
     step.addEventListener("click", () => showStep(step.dataset.step));
@@ -1268,6 +1478,7 @@ function initApp() {
   if (appInitialized) return;
   appInitialized = true;
   setSelectedStyle(els.style.value);
+  syncStyleNote();
   restoreDraft();
   updatePrimaryButton();
   updateGuide();

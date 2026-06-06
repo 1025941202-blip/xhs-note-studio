@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>小红书图文生产台 Demo</title>
-    <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./styles.css?v=20260606-resume-edit" />
   </head>
   <body>
     <div class="access-gate" id="accessGate" hidden>
@@ -135,6 +135,10 @@
             <div class="sample-grid" id="sampleGrid">
               <div class="empty-state">第二步会出现封面和正文样图。</div>
             </div>
+            <label class="style-note-field">
+              <span>风格微调</span>
+              <textarea id="styleNote" rows="3" placeholder="例如：减少手账贴纸，标题更大，整体更像工具书。"></textarea>
+            </label>
           </section>
 
           <section class="flow-section" id="publishSection" data-panel="publish">
@@ -171,6 +175,6 @@
       </main>
     </div>
 
-    <script type="module" src="./app.js?v=20260601-access-gate"></script>
+    <script type="module" src="./app.js?v=20260606-resume-edit"></script>
   </body>
 </html>
